@@ -6,17 +6,11 @@ local DIFFICULTY_VOTE = "Easy"
 local TELEPORT_GAME_ID = 9503261072 -- The TDX game ID for rejoining the lobby
 local RESTART_WAIT_TIME = 60       -- Seconds to wait after the final upgrade before teleporting
 
--- Services
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local TeleportService = game:GetService("TeleportService")
-
--- Remote Events (defined here for convenience)
-local PlaceTowerRemote = Remotes:WaitForChild("PlaceTower")
-local UpgradeTowerRemote = Remotes:WaitForChild("TowerUpgradeRequest")
+-- Initial Check for Lobby State
+local APCs = workspace:FindFirstChild("APCs") 
 
 -----------------------------------------------------------
--- Utility Functions
+-- Utility Functions (Services/Remotes defined internally)
 -----------------------------------------------------------
 
 function getCash()
@@ -50,7 +44,10 @@ function getElevatorFolders()
 end
 
 function safeFire(remoteName, args)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes")
     local remote = Remotes:WaitForChild(remoteName)
+    
     pcall(function()
         if args then
             remote:FireServer(unpack(args))
@@ -62,7 +59,10 @@ function safeFire(remoteName, args)
 end
 
 function safeInvoke(remoteName, args)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes")
     local remote = Remotes:WaitForChild(remoteName)
+    
     local success, result = pcall(function()
         return remote:InvokeServer(unpack(args))
     end)
@@ -78,6 +78,7 @@ end
 -----------------------------------------------------------
 -- Tower Placement and Upgrade Sequence Data
 -----------------------------------------------------------
+-- Tower ID is the index in the sequence (1, 2, 3, etc.)
 
 local placementAndUpgradeSequence = {
     -- 1. Place John (Tower ID 1)
@@ -114,6 +115,8 @@ local placementAndUpgradeSequence = {
     { type = "upgrade", cost = 600, towerId = 6, path = 2 },
     { type = "upgrade", cost = 3650, towerId = 6, path = 2 },
     { type = "upgrade", cost = 7500, towerId = 6, path = 2 },
+    { type = "upgrade", cost = 14000, towerId = 6, path = 2 }, 
+    
 
     -- 7. Place Juggernaut (Tower ID 7)
     { type = "place", cost = 6350, tower = "Juggernaut", position = vector.create(-362.9827880859375, 123.75299835205078, -106.51229095458984) },
@@ -148,7 +151,7 @@ local placementAndUpgradeSequence = {
     { type = "upgrade", cost = 7500, towerId = 9, path = 2 },
     { type = "upgrade", cost = 14000, towerId = 9, path = 2 },
     
-    -- Final Max Upgrades
+    -- Final Max Upgrades (60k)
     { type = "upgrade", cost = 60000, towerId = 8, path = 2 },
     { type = "upgrade", cost = 60000, towerId = 9, path = 2 },
 }
@@ -233,7 +236,7 @@ while true do
     end
 
     -----------------------------------------------------------
-    -- Match Start Sequence 
+    -- Match Start Sequence & Speed Toggle
     -----------------------------------------------------------
     print("Starting Match Preparation Sequence...")
     task.wait(10)
@@ -244,7 +247,15 @@ while true do
         print("Voted for " .. DIFFICULTY_VOTE .. " difficulty.")
 
         safeFire("DifficultyVoteReady")
-        print("Clicked Ready. Waiting for wave 1...")
+        print("Clicked Ready.")
+        
+        -- NEW: Speed Control Toggle
+        local speedArgs = {
+            true,
+            true
+        }
+        safeFire("SoloToggleSpeedControl", speedArgs)
+        print("Activated Solo Speed Control (true, true). Waiting for wave 1...")
     end
 
     -----------------------------------------------------------
@@ -294,6 +305,7 @@ while true do
     -- Restart Loop: Teleport to Lobby
     -----------------------------------------------------------
     print("Teleporting back to lobby to restart the farming cycle.")
+    local TeleportService = game:GetService("TeleportService")
     pcall(function()
         TeleportService:Teleport(TELEPORT_GAME_ID)
     end)
