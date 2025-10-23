@@ -2,6 +2,7 @@
 local TARGET_MAP = "Blox Out" 
 local SHORT_DELAY = 5    -- Seconds to wait if no match is found
 local LONG_DELAY = 30    -- Seconds to wait after a successful teleport attempt
+local COOLDOWN_DELAY = 30  -- NEW: Seconds to wait after another player joins your APC
 local DIFFICULTY_VOTE = "Easy"
 local TELEPORT_GAME_ID = 9503261072 -- The TDX game ID for rejoining the lobby
 local RESTART_WAIT_TIME = 60       -- Seconds to wait after the final upgrade before teleporting
@@ -78,7 +79,6 @@ end
 -----------------------------------------------------------
 -- Tower Placement and Upgrade Sequence Data
 -----------------------------------------------------------
--- Tower ID is the index in the sequence (1, 2, 3, etc.)
 
 local placementAndUpgradeSequence = {
     -- 1. Place John (Tower ID 1)
@@ -168,46 +168,111 @@ while true do
         print("--- NEW CYCLE STARTED ---")
         print("Detected Lobby State. Starting Map Selection Automation...")
 
-        local function findAndJoinMatch()
+        local function checkAndMonitorAPC(elevator)
+            local seatFolder = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Seats")
             local player = game:GetService("Players").LocalPlayer
-            local elevatorFolders = getElevatorFolders()
-            print("Starting lobby automation for '" .. TARGET_MAP .. "'.")
-            local currentDelay = SHORT_DELAY
+            local character = player.Character
+            local initialSeat = nil
+            
+            -- Function to count occupants and check for the player
+            local function checkOccupants()
+                local occupantCount = 0
+                local isPlayerSeated = false
+                
+                for _, seat in ipairs(seatFolder:GetChildren()) do
+                    if seat:IsA("Seat") and seat.Occupant then
+                        occupantCount = occupantCount + 1
+                        if seat.Occupant.Parent == character then
+                            isPlayerSeated = true
+                            initialSeat = seat -- Remember the player's seat
+                        end
+                    end
+                end
+                return occupantCount, isPlayerSeated
+            end
 
+            -- Initial check before teleporting
+            local initialCount, _ = checkOccupants()
+            if initialCount > 0 then
+                print("APC is occupied before I even sat down. Skipping this APC.")
+                return false, false
+            end
+
+            -- Teleport and sit down
+            local rampPart = elevator.APC.Ramp
+            local character = player.Character or player.CharacterAdded:Wait()
+            if character and character.HumanoidRootPart then
+                character.HumanoidRootPart.CFrame = rampPart.CFrame
+                task.wait(0.5)
+
+                -- Check if we successfully sat down (should happen automatically)
+                local currentCount, isSeated = checkOccupants()
+                if not isSeated or currentCount ~= 1 then
+                    print("Failed to sit down or someone joined instantly. Retrying search.")
+                    return false, false
+                end
+            end
+
+            print("CONFIRMED: Successfully seated and alone. Monitoring for intruders...")
+
+            -- Continuous monitoring loop
+            local matchStarted = false
             while workspace:FindFirstChild("APCs") do
-                local matchFoundAndSeated = false
+                local occupantCount, isPlayerSeated = checkOccupants()
+                
+                if occupantCount > 1 and isPlayerSeated then
+                    print(string.format("Intruder detected! Occupants: %d. Exiting APC...", occupantCount))
+                    
+                    -- Stand up/eject
+                    if initialSeat then
+                        pcall(function()
+                            initialSeat.Disabled = true -- Temporarily disable to force stand up
+                            if character and character.HumanoidRootPart then
+                                character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame + Vector3.new(0, 5, 0)
+                            end
+                            initialSeat.Disabled = false
+                        end)
+                    end
+                    
+                    print(string.format("Teleporting failed. Waiting %d seconds cooldown.", COOLDOWN_DELAY))
+                    task.wait(COOLDOWN_DELAY)
+                    return false, true -- Found match, but left (wait for next cycle)
+                end
+                
+                task.wait(1) -- Check every second
+            end
+            
+            -- If we exit the loop, it means the match started (APCs vanished)
+            print("APC vanished. Match has started.")
+            return true, false
+        end
+
+        local function findAndJoinMatch()
+            local elevatorFolders = getElevatorFolders()
+            local currentDelay = SHORT_DELAY
+            local matchFoundAndSeated = false
+            
+            while workspace:FindFirstChild("APCs") and not matchFoundAndSeated do
+                local intruderDetectedAndLeft = false
                 
                 for _, elevator in ipairs(elevatorFolders) do
                     local mapDisplay = elevator:FindFirstChild("mapdisplay")
-                    local rampPart = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Ramp")
-
-                    if mapDisplay and rampPart then
+                    
+                    if mapDisplay then
                         local mapNamePath = mapDisplay.screen.displayscreen.map
                         local currentMap = mapNamePath and (mapNamePath.ContentText or mapNamePath.Text)
                         
                         if currentMap and currentMap:lower():find(TARGET_MAP:lower()) then
-                            print("Match found: " .. TARGET_MAP .. ". Attempting teleport...")
-                            local player = game:GetService("Players").LocalPlayer
-                            local character = player.Character or player.CharacterAdded:Wait()
-                            if character and character.HumanoidRootPart then
-                                character.HumanoidRootPart.CFrame = rampPart.CFrame
-                                task.wait(0.5)
-                                
-                                local seatFolder = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Seats")
-                                if seatFolder then
-                                    local humanoid = character.Humanoid
-                                    for _, seat in ipairs(seatFolder:GetChildren()) do
-                                        if seat:IsA("Seat") and seat.Occupant == humanoid then
-                                            matchFoundAndSeated = true
-                                            break 
-                                        end
-                                    end
-                                end
-                                
-                                if matchFoundAndSeated then
-                                    print("CONFIRMED: Successfully seated. Waiting " .. LONG_DELAY .. "s for match to start...")
-                                    break
-                                end
+                            print("Match found: " .. TARGET_MAP .. ". Checking and monitoring APC...")
+                            
+                            local started, left = checkAndMonitorAPC(elevator)
+                            
+                            if started then
+                                matchFoundAndSeated = true
+                                break 
+                            elseif left then
+                                intruderDetectedAndLeft = true
+                                break
                             end
                         end
                     end
@@ -221,6 +286,10 @@ while true do
                         print("Finished long delay. Resuming quick check loop.")
                         currentDelay = SHORT_DELAY
                     end
+                elseif intruderDetectedAndLeft then
+                    -- Cooldown already happened in checkAndMonitorAPC
+                    currentDelay = SHORT_DELAY
+                    print("Cooldown finished. Resuming immediate search.")
                 else
                     print("Check failed. Retrying in " .. currentDelay .. "s...")
                     task.wait(currentDelay)
@@ -249,14 +318,17 @@ while true do
         safeFire("DifficultyVoteReady")
         print("Clicked Ready.")
         
-        -- NEW: Speed Control Toggle
+        -- Speed Control Toggle
         local speedArgs = {
             true,
             true
         }
         safeFire("SoloToggleSpeedControl", speedArgs)
-        print("Activated Solo Speed Control (true, true). Waiting for wave 1...")
+        print("Activated Solo Speed Control (true, true).")
     end
+    
+    -- Final wait for the game to start/wave 1 to begin
+    task.wait(5)
 
     -----------------------------------------------------------
     -- In-Game Farming Loop
