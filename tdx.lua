@@ -4,7 +4,7 @@ local SHORT_DELAY = 5
 local LONG_DELAY = 30
 local DIFFICULTY_VOTE = "Easy"
 local TELEPORT_GAME_ID = 9503261072
-local MATCH_DURATION_WAIT = 570 -- 9 minutes 30 seconds (570 seconds)
+local MATCH_DURATION_WAIT = 570
 
 local APCs = workspace:FindFirstChild("APCs") 
 
@@ -127,17 +127,12 @@ local placementAndUpgradeSequence = {
 
 while true do
     local APCs = workspace:FindFirstChild("APCs") 
-    local timerStartTime = 0 -- Reset timer
+    local timerStartTime = 0
 
     if APCs then
-        -- --- State: LOBBY (APCs are visible) ---
-        print("--- NEW CYCLE STARTED ---")
-        print("Detected Lobby State. Starting Map Selection Automation...")
-
         local function findAndJoinMatch()
             local player = game:GetService("Players").LocalPlayer
             local elevatorFolders = getElevatorFolders()
-            print("Starting lobby automation for '" .. TARGET_MAP .. "'.")
             local currentDelay = SHORT_DELAY
 
             while workspace:FindFirstChild("APCs") do
@@ -152,11 +147,9 @@ while true do
                         local currentMap = mapNamePath and (mapNamePath.ContentText or mapNamePath.Text)
                         
                         if currentMap and currentMap:lower():find(TARGET_MAP:lower()) then
-                            print("Match found: " .. TARGET_MAP .. ". Attempting teleport...")
                             local player = game:GetService("Players").LocalPlayer
                             local character = player.Character or player.CharacterAdded:Wait()
                             if character and character.HumanoidRootPart then
-                                -- Simple teleport to the ramp to sit automatically
                                 character.HumanoidRootPart.CFrame = rampPart.CFrame
                                 task.wait(0.5)
                                 
@@ -172,7 +165,6 @@ while true do
                                 end
                                 
                                 if matchFoundAndSeated then
-                                    print("CONFIRMED: Successfully seated. Waiting " .. LONG_DELAY .. "s for match to start...")
                                     break
                                 end
                             end
@@ -180,16 +172,13 @@ while true do
                     end
                 end
                 
-                -- --- Delay Logic ---
                 if matchFoundAndSeated then
                     currentDelay = LONG_DELAY
                     task.wait(currentDelay)
                     if workspace:FindFirstChild("APCs") then
-                        print("Finished long delay. Resuming quick check loop.")
                         currentDelay = SHORT_DELAY
                     end
                 else
-                    print("Check failed. Retrying in " .. currentDelay .. "s...")
                     task.wait(currentDelay)
                 end
             end
@@ -197,36 +186,26 @@ while true do
 
         findAndJoinMatch()
         
-    else
-        -- --- State: IN-MATCH / PRE-GAME (APCs are NOT visible) ---
-        print("Detected In-Match/Pre-Game State. Skipping Lobby Automation.")
     end
 
     -----------------------------------------------------------
     -- Match Start Sequence & Timer Initialization
     -----------------------------------------------------------
-    print("Starting Match Preparation Sequence...")
     task.wait(10)
 
     if not workspace:FindFirstChild("Enemies") then 
         local voteArgs = { DIFFICULTY_VOTE }
         safeFire("DifficultyVoteCast", voteArgs)
-        print("Voted for " .. DIFFICULTY_VOTE .. " difficulty.")
 
         safeFire("DifficultyVoteReady")
-        print("Clicked Ready.")
         
-        -- Speed Control Toggle
         local speedArgs = {
             true,
             true
         }
         safeFire("SoloToggleSpeedControl", speedArgs)
-        print("Activated Solo Speed Control (true, true).")
         
-        -- START TIMER RIGHT AFTER SPEED TOGGLE
         timerStartTime = os.clock()
-        print(string.format("Match timer started at %.2f seconds.", timerStartTime))
     end
     
     task.wait(5)
@@ -234,11 +213,9 @@ while true do
     -----------------------------------------------------------
     -- In-Game Farming Loop
     -----------------------------------------------------------
-    print("Executing automated placement and upgrade sequence...")
 
     for i, action in ipairs(placementAndUpgradeSequence) do
         if action.type == "place" then
-            print(string.format("Waiting for %.0f cash to place %s...", action.cost, action.tower))
             waitForCash(action.cost)
             
             local placeArgs = {
@@ -249,14 +226,8 @@ while true do
             }
             
             local success, result = safeInvoke("PlaceTower", placeArgs)
-            if success then
-                print(string.format("Successfully placed Tower #%d: %s", i, action.tower))
-            else
-                print(string.format("ERROR placing Tower #%d: %s. Error: %s", i, action.tower, tostring(result)))
-            end
 
         elseif action.type == "upgrade" then
-            print(string.format("Attempting to upgrade Tower %d (Path %d) for %.0f cash...", action.towerId, action.path, action.cost))
             waitForCash(action.cost) 
             
             local upgradeArgs = {
@@ -266,34 +237,27 @@ while true do
             }
             
             safeFire("TowerUpgradeRequest", upgradeArgs)
-            print(string.format("Requested upgrade for Tower %d (Path %d)", action.towerId, action.path))
         end
     end
     
     -----------------------------------------------------------
     -- Match Duration Wait & Restart Loop
     -----------------------------------------------------------
-    print(string.format("Automated build complete. Calculating remaining time for %d seconds total.", MATCH_DURATION_WAIT))
-
-    -- Check if the timer was started (i.e., we successfully readied up)
+    
     if timerStartTime > 0 then
         local elapsedTime = os.clock() - timerStartTime
         local remainingTime = MATCH_DURATION_WAIT - elapsedTime
         
         if remainingTime > 0 then
-            print(string.format("Waiting %.2f seconds until teleport.", remainingTime))
             task.wait(remainingTime)
         else
-            print("Warning: Match duration exceeded target time. Teleporting immediately.")
+            task.wait(0) 
         end
     else
-        -- Fallback if the timer wasn't started (e.g., joined mid-match)
-        print("Timer not started. Waiting 60 seconds as a fallback.")
         task.wait(60) 
     end
 
     local TeleportService = game:GetService("TeleportService")
-    print("Teleporting back to lobby to restart the farming cycle.")
     pcall(function()
         TeleportService:Teleport(TELEPORT_GAME_ID)
     end)
