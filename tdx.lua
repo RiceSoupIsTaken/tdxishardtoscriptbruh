@@ -2,9 +2,10 @@
 local TARGET_MAP = "Blox Out" 
 local SHORT_DELAY = 5
 local LONG_DELAY = 30
+local COOLDOWN_DELAY = 30 -- Cooldown if another player joins your APC
 local DIFFICULTY_VOTE = "Easy"
 local TELEPORT_GAME_ID = 9503261072
-local MATCH_DURATION_WAIT = 570
+local MATCH_DURATION_WAIT = 570 -- 9 minutes 30 seconds
 
 local APCs = workspace:FindFirstChild("APCs") 
 
@@ -122,12 +123,71 @@ local placementAndUpgradeSequence = {
 }
 
 -----------------------------------------------------------
+-- APC MONITOR FUNCTION
+-----------------------------------------------------------
+
+local function monitorAPC(elevator)
+    local seatFolder = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Seats")
+    local player = game:GetService("Players").LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local initialSeat = nil
+    
+    -- Find the seat the player is in
+    for _, seat in ipairs(seatFolder:GetChildren()) do
+        if seat:IsA("Seat") and seat.Occupant and seat.Occupant.Parent == character then
+            initialSeat = seat
+            break
+        end
+    end
+    
+    if not initialSeat then 
+        return false -- Player failed to seat or match started, continue main loop
+    end
+
+    -- Continuous monitoring loop (runs until APCs vanish)
+    while workspace:FindFirstChild("APCs") do
+        local occupantCount = 0
+        local isPlayerSeated = false
+        
+        for _, seat in ipairs(seatFolder:GetChildren()) do
+            if seat:IsA("Seat") and seat.Occupant then
+                occupantCount = occupantCount + 1
+                if seat.Occupant.Parent == character then
+                    isPlayerSeated = true
+                end
+            end
+        end
+        
+        if occupantCount > 1 and isPlayerSeated then
+            -- INTRUDER DETECTED!
+            
+            -- Force stand up/eject
+            pcall(function()
+                initialSeat.Disabled = true
+                if character and character.HumanoidRootPart then
+                    character.HumanoidRootPart.CFrame = character.HumanoidRootPart.CFrame + Vector3.new(0, 5, 0)
+                end
+                initialSeat.Disabled = false
+            end)
+            
+            task.wait(COOLDOWN_DELAY)
+            return true -- Intended to return to findAndJoinMatch and start a new search
+        end
+        
+        task.wait(1)
+    end
+    
+    return false -- Match started successfully
+end
+
+-----------------------------------------------------------
 -- MAIN FARMING LOOP
 -----------------------------------------------------------
 
 while true do
     local APCs = workspace:FindFirstChild("APCs") 
     local timerStartTime = 0
+    local shouldRestart = false
 
     if APCs then
         local function findAndJoinMatch()
@@ -135,36 +195,50 @@ while true do
             local elevatorFolders = getElevatorFolders()
             local currentDelay = SHORT_DELAY
 
-            while workspace:FindFirstChild("APCs") do
+            while workspace:FindFirstChild("APCs") and not shouldRestart do
                 local matchFoundAndSeated = false
                 
                 for _, elevator in ipairs(elevatorFolders) do
                     local mapDisplay = elevator:FindFirstChild("mapdisplay")
                     local rampPart = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Ramp")
+                    local seatFolder = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Seats")
 
-                    if mapDisplay and rampPart then
+                    if mapDisplay and rampPart and seatFolder then
                         local mapNamePath = mapDisplay.screen.displayscreen.map
                         local currentMap = mapNamePath and (mapNamePath.ContentText or mapNamePath.Text)
                         
-                        if currentMap and currentMap:lower():find(TARGET_MAP:lower()) then
+                        -- Pre-check if APC is empty
+                        local occupantCount = 0
+                        for _, seat in ipairs(seatFolder:GetChildren()) do
+                            if seat:IsA("Seat") and seat.Occupant then
+                                occupantCount = occupantCount + 1
+                            end
+                        end
+
+                        if currentMap and currentMap:lower():find(TARGET_MAP:lower()) and occupantCount == 0 then
+                            
                             local player = game:GetService("Players").LocalPlayer
                             local character = player.Character or player.CharacterAdded:Wait()
+                            
                             if character and character.HumanoidRootPart then
+                                -- Simple teleport to the ramp to sit automatically
                                 character.HumanoidRootPart.CFrame = rampPart.CFrame
                                 task.wait(0.5)
                                 
-                                local seatFolder = elevator:FindFirstChild("APC") and elevator.APC:FindFirstChild("Seats")
-                                if seatFolder then
-                                    local humanoid = character.Humanoid
-                                    for _, seat in ipairs(seatFolder:GetChildren()) do
-                                        if seat:IsA("Seat") and seat.Occupant == humanoid then
-                                            matchFoundAndSeated = true
-                                            break 
-                                        end
+                                local humanoid = character.Humanoid
+                                for _, seat in ipairs(seatFolder:GetChildren()) do
+                                    if seat:IsA("Seat") and seat.Occupant == humanoid then
+                                        matchFoundAndSeated = true
+                                        break 
                                     end
                                 end
                                 
                                 if matchFoundAndSeated then
+                                    -- Start monitoring this specific APC
+                                    shouldRestart = monitorAPC(elevator)
+                                    if shouldRestart then
+                                        return -- Restart the whole findAndJoinMatch loop
+                                    end
                                     break
                                 end
                             end
@@ -258,9 +332,17 @@ while true do
     end
 
     local TeleportService = game:GetService("TeleportService")
-    pcall(function()
-        TeleportService:Teleport(TELEPORT_GAME_ID)
-    end)
+    -- Use a robust pcall loop for teleporting to handle potential timeouts/failures
+    local maxRetries = 3
+    for attempt = 1, maxRetries do
+        local success = pcall(function()
+            TeleportService:Teleport(TELEPORT_GAME_ID)
+        end)
+        if success then
+            break
+        end
+        task.wait(5)
+    end
     
     task.wait(10)
 end
